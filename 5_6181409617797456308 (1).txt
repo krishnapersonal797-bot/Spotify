@@ -1,0 +1,348 @@
+cd /root/bot/ && cat > spotify_bot.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Telegram Bot - Spotify Offer Link Generator
+With real-time logging
+"""
+
+import os
+import sys
+import time
+import json
+import re
+import random
+import zipfile
+import tempfile
+import logging
+from datetime import datetime
+import asyncio
+from threading import Thread
+
+# Telegram
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+
+# Selenium
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/root/bot/bot.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+BOT_TOKEN = "8933943523:AAFR0SC6rJnSv6uo-O6dMKaGaNMXxxb-K3M"
+
+PROXY_HOST = "gw.dataimpulse.com"
+PROXY_PORT = "823"
+PROXY_USER = "f6c1b50689f8a8276d68__cr.mx"
+PROXY_PASS = "b193ed8db470e6bb"
+
+# ============================================================
+# PROXY EXTENSION
+# ============================================================
+
+def create_proxy_extension():
+    manifest_json = """
+    {"version":"1.0.0","manifest_version":2,"name":"Proxy","permissions":["proxy","tabs","storage","<all_urls>","webRequest","webRequestBlocking"],"background":{"scripts":["bg.js"]},"minimum_chrome_version":"22.0.0"}
+    """
+    background_js = f"""
+    var config={{mode:"fixed_servers",rules:{{singleProxy:{{scheme:"http",host:"{PROXY_HOST}",port:parseInt({PROXY_PORT})}},bypassList:["localhost"]}}}};chrome.proxy.settings.set({{value:config,scope:"regular"}},function(){{}});function cb(d){{return{{authCredentials:{{username:"{PROXY_USER}",password:"{PROXY_PASS}"}}}};}}chrome.webRequest.onAuthRequired.addListener(cb,{{urls:["<all_urls>"]}},["blocking"]);
+    """
+    path = '/tmp/proxy_auth.zip'
+    with zipfile.ZipFile(path, 'w') as zp:
+        zp.writestr("manifest.json", manifest_json)
+        zp.writestr("bg.js", background_js)
+    return path
+
+# ============================================================
+# LINK GENERATOR
+# ============================================================
+
+def generate_one_link():
+    """Generate one Spotify offer link"""
+    logger.info("→ Generating one link...")
+    try:
+        options = Options()
+        options.add_extension(create_proxy_extension())
+        options.add_argument('--headless=new')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36')
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        d = webdriver.Chrome(service=Service('/usr/local/bin/chromedriver'), options=options)
+        d.set_page_load_timeout(60)
+        d.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        # Get temp email
+        logger.info("  → Getting temp email...")
+        d.get('https://temp-mail.io/en/')
+        time.sleep(5)
+        email = None
+        for sel in ['#email', '.email-address', 'input#email']:
+            try:
+                e = d.find_element(By.CSS_SELECTOR, sel).get_attribute('value') or ''
+                if '@' in e:
+                    email = e
+                    break
+            except: pass
+        if not email:
+            m = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', d.page_source)
+            email = m.group(0) if m else None
+        if not email:
+            logger.warning("  ✗ No email found")
+            d.quit()
+            return None
+        logger.info(f"  ✓ Email: {email}")
+        
+        p = f'AutoPass_{random.randint(100000,999999)}!@#'
+        
+        # Register
+        logger.info("  → Registering...")
+        d.get('https://www2.hm.com/en_in/register')
+        time.sleep(5)
+        for sel in ['input#email', 'input[name="email"]', 'input[type="email"]']:
+            try: d.find_element(By.CSS_SELECTOR, sel).send_keys(email); break
+            except: pass
+        for sel in ['input#password', 'input[name="password"]', 'input[type="password"]']:
+            try: d.find_element(By.CSS_SELECTOR, sel).send_keys(p); break
+            except: pass
+        for sel in ['button[type="submit"]', 'input[type="submit"]']:
+            try: d.find_element(By.CSS_SELECTOR, sel).click(); break
+            except: pass
+        time.sleep(5)
+        logger.info("  ✓ Registered")
+        
+        # Login
+        logger.info("  → Logging in...")
+        d.get('https://www2.hm.com/en_in/login')
+        time.sleep(5)
+        wait = WebDriverWait(d, 20)
+        for sel in ['input#email', 'input[name="email"]', 'input[type="email"]']:
+            try:
+                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, sel))).send_keys(email)
+                break
+            except: pass
+        for sel in ['input#password', 'input[name="password"]', 'input[type="password"]']:
+            try:
+                d.find_element(By.CSS_SELECTOR, sel).send_keys(p)
+                break
+            except: pass
+        for sel in ['button[type="submit"]', 'input[type="submit"]']:
+            try:
+                d.find_element(By.CSS_SELECTOR, sel).click()
+                break
+            except: pass
+        time.sleep(5)
+        logger.info("  ✓ Logged in")
+        
+        # Account page
+        logger.info("  → Getting account page...")
+        d.get('https://www2.hm.com/en_in/account')
+        time.sleep(5)
+        page_source = d.page_source
+        
+        if 'Access Denied' in page_source:
+            logger.warning("  ✗ Access Denied")
+            d.quit()
+            return None
+        
+        # Extract code
+        offer_code = None
+        q_matches = re.findall(r'q[A-Za-z0-9]{9,11}', page_source)
+        if q_matches:
+            offer_code = q_matches[0]
+            logger.info(f"  ✓ Found code: {offer_code}")
+        if not offer_code:
+            match = re.search(r'[Oo]ffer code\s*[:]\s*([A-Za-z0-9]{8,12})', page_source)
+            if match:
+                offer_code = match.group(1)
+                logger.info(f"  ✓ Found code: {offer_code}")
+        if not offer_code:
+            matches = re.findall(r'[A-Z][A-Za-z0-9]{9,11}', page_source)
+            for m in matches:
+                if m.lower() not in ['razorpay', 'spotify', 'https', 'www2hm', 'permission']:
+                    offer_code = m
+                    logger.info(f"  ✓ Found code: {offer_code}")
+                    break
+        
+        d.quit()
+        if offer_code:
+            link = f"https://www.spotify.com/mx/ppt/hm/?code={offer_code}"
+            logger.info(f"  ✅ Link generated: {link[:50]}...")
+            return link
+        logger.warning("  ✗ No offer code found")
+        return None
+        
+    except Exception as e:
+        logger.error(f"  ✗ Error: {e}")
+        try: d.quit()
+        except: pass
+        return None
+
+def generate_links(count):
+    """Generate multiple links with progress"""
+    links = []
+    success = 0
+    fail = 0
+    
+    logger.info(f"🔄 Generating {count} links...")
+    
+    for i in range(count):
+        logger.info(f"📌 Link {i+1}/{count}")
+        link = generate_one_link()
+        if link:
+            links.append(link)
+            success += 1
+        else:
+            fail += 1
+        if i < count - 1:
+            wait_time = random.uniform(10, 20)
+            logger.info(f"⏳ Waiting {wait_time:.0f}s before next...")
+            time.sleep(wait_time)
+    
+    logger.info(f"✅ Done! Success: {success}, Failed: {fail}")
+    return links, success, fail
+
+# ============================================================
+# TELEGRAM BOT HANDLERS
+# ============================================================
+
+async def start(update: Update, context: CallbackContext):
+    user = update.effective_user
+    logger.info(f"📱 /start from user {user.id} ({user.username})")
+    await update.message.reply_text(
+        "🎵 <b>Spotify Link Generator</b>\n\n"
+        "Send me a number (1-10) and I'll generate that many links.\n"
+        "I'll send you a file with all the links.\n\n"
+        "Example: <code>5</code>\n\n"
+        "⚠️ Each link takes ~2 minutes to generate.",
+        parse_mode='HTML'
+    )
+
+async def handle_message(update: Update, context: CallbackContext):
+    user = update.effective_user
+    text = update.message.text.strip()
+    logger.info(f"📱 Message from user {user.id}: {text}")
+    
+    try:
+        count = int(text)
+        if count < 1 or count > 10:
+            logger.warning(f"⚠️ User {user.id} sent invalid number: {count}")
+            await update.message.reply_text("❌ Send a number between 1 and 10.")
+            return
+    except ValueError:
+        logger.warning(f"⚠️ User {user.id} sent non-number: {text}")
+        await update.message.reply_text("❌ Send a valid number (e.g., <code>5</code>)", parse_mode='HTML')
+        return
+    
+    logger.info(f"✅ User {user.id} requested {count} links")
+    
+    status = await update.message.reply_text(
+        f"🔄 Generating {count} links...\n"
+        f"⏳ This will take ~{count*2} minutes.\n"
+        f"📊 Check logs on VPS for progress."
+    )
+    
+    # Generate links (this runs synchronously)
+    links, success, fail = generate_links(count)
+    
+    if links:
+        logger.info(f"📁 Generating file with {len(links)} links...")
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(f"🎵 Spotify Links\n")
+            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("="*50 + "\n\n")
+            for idx, link in enumerate(links, 1):
+                f.write(f"{idx}. {link}\n")
+            file_path = f.name
+        
+        with open(file_path, 'rb') as f:
+            await update.message.reply_document(
+                document=f,
+                filename=f'spotify_links_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt',
+                caption=f"✅ Generated {len(links)} links\n"
+                        f"✅ Success: {success}\n"
+                        f"❌ Failed: {fail}"
+            )
+        
+        os.unlink(file_path)
+        
+        preview = "\n".join(links[:5])
+        if len(links) > 5:
+            preview += f"\n\n... and {len(links)-5} more in the file"
+        await update.message.reply_text(f"🎵 <b>Your Links:</b>\n\n{preview}", parse_mode='HTML')
+        logger.info(f"✅ Sent {len(links)} links to user {user.id}")
+    else:
+        logger.warning(f"❌ No links generated for user {user.id}")
+        await update.message.reply_text("❌ Failed to generate any links. Try again later.")
+    
+    await status.delete()
+
+async def cancel(update: Update, context: CallbackContext):
+    user = update.effective_user
+    logger.info(f"📱 /cancel from user {user.id}")
+    await update.message.reply_text("❌ Cancelled. Send /start to restart.")
+
+async def help_command(update: Update, context: CallbackContext):
+    await update.message.reply_text(
+        "🎵 <b>Spotify Link Generator</b>\n\n"
+        "Send a number (1-10) to generate that many Spotify links.\n"
+        "You'll receive a file with all the links.\n\n"
+        "Commands:\n"
+        "/start - Start the bot\n"
+        "/help - Show this help\n"
+        "/cancel - Cancel operation",
+        parse_mode='HTML'
+    )
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+    logger.info("🚀 Starting Spotify Link Generator Bot...")
+    logger.info(f"Bot Token: {BOT_TOKEN[:10]}...")
+    
+    app = Application.builder().token(BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    logger.info("✅ Bot is running! Send /start in Telegram.")
+    logger.info("📋 Logs will appear here when users interact.")
+    
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped.")
+        sys.exit(0)
+EOF
+
+# Run the bot
+cd /root/bot/ && python3 spotify_bot.py
